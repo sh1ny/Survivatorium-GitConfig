@@ -1,0 +1,17 @@
+# Packed PBO files
+*.pbo
+*.bisign
+
+# DayZ Workbench
+*.ebo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
