@@ -1,16 +1,8 @@
 #ifdef SERVER
 
-// Initialization hook — runs at 3_Game load, before mission init
-modded class DayZGame
-{
-	private static int s_svcGitConfigInit = SVC_InitGitConfig();
-
-	static int SVC_InitGitConfig()
-	{
-		SVC_GitConfigMain.Run();
-		return 1;
-	}
-}
+// NOTE: In DayZ 1.29, CreateRestApi() returns null during #InitGlobals (3_Game static init).
+// The full sync is now deferred to 5_Mission where RestApi is available.
+// See SVC_GitConfigDeferred.c
 
 class SVC_GitConfigMain
 {
