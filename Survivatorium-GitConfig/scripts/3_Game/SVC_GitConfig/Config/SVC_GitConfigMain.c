@@ -68,6 +68,7 @@ class SVC_GitConfigMain
 			return 0;
 
 		ProcessFiles(files);
+		WaitForLfsDownloads();
 
 		if (m_FileChanged)
 			SaveConfig();
@@ -118,7 +119,7 @@ class SVC_GitConfigMain
 	static bool SaveConfig()
 	{
 		string error;
-		CreateDirectoryRecursive("$profile:Survivatorium-GitConfig");
+		CreateParentDirectories(CONFIG_PATH);
 		if (!JsonFileLoader<SVC_GitConfigSettings>.SaveFile(CONFIG_PATH, m_Settings, error))
 		{
 			Error(LOG_PREFIX + "Failed to save config: " + error);
@@ -734,10 +735,126 @@ class SVC_GitConfigMain
 			DownloadAndWrite(entry.path, localPath, entry.sha, entry.size);
 		}
 
+		WaitForLfsDownloads();
+
 		if (m_FileChanged)
 			SaveConfig();
 
 		Print(LOG_PREFIX + "Deferred mission sync complete. Downloaded: " + m_DownloadedFiles.ToString());
+	}
+
+	// =========================================================================
+	// LFS download wait — polls /lfs-status until all background tasks finish
+	// =========================================================================
+
+	// Poll the proxy's /lfs-status endpoint until all LFS background downloads
+	// have completed (pending == 0) or until we hit the poll limit.
+	// The proxy sleeps 1 s server-side when pending > 0, so each GET_now() call
+	// naturally paces itself; no Sleep() is needed here.
+	// Max 600 polls ≈ 10 minutes ceiling before giving up.
+	static void WaitForLfsDownloads()
+	{
+		if (!m_Settings)
+			return;
+
+		RestApi api = GetRestApi();
+		if (!api)
+			api = CreateRestApi();
+
+		string statusUrl = m_Settings.proxyUrl + "/lfs-status";
+		int maxPolls = 600;
+		bool headerPrinted = false;
+		bool transientLogged = false;
+		int startTime = TickCount(0);
+
+		RestContext ctx = api.GetRestContext(statusUrl);
+		ctx.SetHeader("application/json");
+
+		for (int i = 0; i < maxPolls; i++)
+		{
+			string response = ctx.GET_now("");
+
+			int pending = ExtractJsonInt(response, "pending");
+
+			// pending < 0 means parse failure — proxy may be an older build
+			// without /lfs-status. Bail out silently on the first attempt.
+			if (pending < 0)
+			{
+				if (i == 0)
+					return;
+				// Transient read failure mid-poll — log first occurrence, keep trying
+				if (!transientLogged)
+				{
+					Print(LOG_PREFIX + "Transient /lfs-status read failure (poll " + (i + 1).ToString() + "), retrying...");
+					transientLogged = true;
+				}
+				continue;
+			}
+
+			if (pending == 0)
+			{
+				if (headerPrinted)
+				{
+					int failed = ExtractJsonInt(response, "failed");
+					if (failed > 0)
+					{
+						m_FailedFiles += failed;
+						Error(LOG_PREFIX + "LFS downloads finished with " + failed.ToString() + " failure(s). Some large files may be incomplete.");
+					}
+					else
+						Print(LOG_PREFIX + "All LFS downloads complete.");
+				}
+				return;
+			}
+
+			if (!headerPrinted)
+			{
+				Print(LOG_PREFIX + "Waiting for " + pending.ToString() + " LFS background download(s) to complete...");
+				headerPrinted = true;
+			}
+			else
+			{
+				Print(LOG_PREFIX + "LFS still pending: " + pending.ToString() + " (poll " + (i + 1).ToString() + "/" + maxPolls.ToString() + ")");
+			}
+		}
+
+		int elapsed = TickCount(startTime) / 10000;
+		Error(LOG_PREFIX + "Timed out waiting for LFS downloads after " + (elapsed / 1000).ToString() + "s (" + maxPolls.ToString() + " polls). Some large files may be incomplete.");
+	}
+
+	// Extract an integer value from a minimal JSON string by key name.
+	// Handles multi-digit values; returns -1 if the key is not found.
+	static int ExtractJsonInt(string json, string key)
+	{
+		string search = "\"" + key + "\":";
+		int pos = json.IndexOf(search);
+		if (pos < 0)
+			return -1;
+		pos += search.Length();
+		// Skip optional whitespace between ':' and the digit
+		while (pos < json.Length())
+		{
+			string ws = json.Substring(pos, 1);
+			if (ws == " " || ws == "\t")
+				pos++;
+			else
+				break;
+		}
+		string numStr = "";
+		while (pos < json.Length())
+		{
+			string ch = json.Substring(pos, 1);
+			if (ch >= "0" && ch <= "9")
+			{
+				numStr += ch;
+				pos++;
+			}
+			else
+				break;
+		}
+		if (numStr == "")
+			return -1;
+		return numStr.ToInt();
 	}
 
 	// =========================================================================
