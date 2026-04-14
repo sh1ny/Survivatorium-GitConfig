@@ -158,7 +158,9 @@ class SVC_GitConfigMain
 	static bool ContainsUnsafeChars(string val)
 	{
 		if (val.Contains("..")) return true;
-		if (val.Contains("/")) return true;
+		// Forward slash now allowed — enables nested serverFolder paths (e.g. "servers/v5")
+    	// Path traversal is still blocked by the ".." check above
+		// if (val.Contains("/")) return true;
 		if (val.Contains("\\")) return true;
 		if (val.Contains("?")) return true;
 		if (val.Contains("&")) return true;
